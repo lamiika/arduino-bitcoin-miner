@@ -29,7 +29,7 @@ void uint32_to_bytes(uint32_t value, uint8_t *serialized_header, uint8_t *iterat
 
 void serialize(BlockHeader header, uint8_t *serialized_header);
 
-void sha256_hash(uint8_t *serialized_header);
+void sha256_hash(uint32_t *words);
 
 int main() {
 //  uart_init();
@@ -103,7 +103,29 @@ void serialize(BlockHeader header, uint8_t *serialized_header) {
   uint32_to_bytes(header.nonce, serialized_header, &iterator);
 }
 
-void sha256_hash(uint8_t *serialized_header) {
+uint32_t pad(uint8_t *bytes, uint16_t length) {
+  uint8_t byte = (length+1) / 8 - 1;
+  uint8_t extra_bit_spot = (length+1) % 8;
+  bytes[byte] = bytes[byte] | (1 << extra_bit_spot);
+  for (int i = extra_bit_spot + 1; i < 8; i++) {
+    bytes[byte] = bytes[byte] | (0 << i);
+  }
+  for (int i = byte + 1; i < 60; i++) {
+    bytes[byte] = 0x00;
+  }
+
+  uint32_t message_block[16];
+  for (int i = 0; i < 16; i++) {
+    message_block[i] = ((uint32_t)bytes[i*4]) |
+      ((uint32_t)bytes[i*4 + 1] << 8) |
+      ((uint32_t)bytes[i*4 + 2] << 16) |
+      ((uint32_t)bytes[i*4 + 3] << 24);
+  }
+
+  return message_block;
+}
+
+void sha256_hash(uint32_t *message_blocks) {
 
 }
 
