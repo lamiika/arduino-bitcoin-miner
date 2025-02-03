@@ -125,8 +125,45 @@ uint32_t pad(uint8_t *bytes, uint16_t length) {
   return message_block;
 }
 
-void sha256_hash(uint32_t *message_blocks) {
+uint32_t rotr(uint32_t word, uint8_t n) {
+  n &= 31;
+  return (word >> n) | (word << (32 - n));
+}
 
+uint32_t shr(uint32_t word, uint8_t n) {
+  return (word >> n);
+}
+
+uint32_t bitwise0(uint32_t word) {
+  uint32_t word1 = rotr(word, 7);
+  uint32_t word2 = rotr(word, 18);
+  uint32_t word3 = shr(word, 3);
+
+  return word1 ^ word2 ^ word3;
+}
+
+uint32_t bitwise1(uint32_t word) {
+  uint32_t word1 = rotr(word, 17);
+  uint32_t word2 = rotr(word, 19);
+  uint32_t word3 = shr(word, 10);
+
+  return word1 ^ word2 ^ word3;
+}
+
+uint32_t schedule(uint32_t *message_block) {
+  uint32_t message_schedule[64];
+
+  for (int i = 0; i < 16; i++) {
+    message_schedule[i] = message_block[i];
+  }
+  for (int i = 16; i < 64; i++) {
+    message_schedule[i] = bitwise1(message_schedule[i-2]) + message_schedule[i-7] + bitwise0(message_schedule[i-15]) + message_schedule[i-16];
+  }
+
+  return message_schedule;
+}
+
+void sha256_hash(uint32_t *message_blocks) {
 }
 
 /*
