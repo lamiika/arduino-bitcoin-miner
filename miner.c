@@ -43,10 +43,11 @@ void uart_transmit(uint8_t data);
 void send_serialized_header(uint8_t *serialized_header, uint8_t length);
 
 void uint32_to_bytes(uint32_t value, uint8_t *serialized_header, uint8_t *iterator);
-
 void serialize(BlockHeader header, uint8_t *serialized_header);
-
-void sha256_hash(uint32_t *words);
+void pad(uint8_t *bytes, uint32_t (*message_blocks)[16]);
+void compression(uint32_t *message_schedule, uint32_t *initial_hash);
+void schedule(uint32_t *message_block, uint32_t *message_schedule);
+void sha256_hash(uint32_t (*message_blocks)[16], uint32_t *initial_hash);
 
 int main() {
 //  uart_init();
@@ -79,10 +80,24 @@ int main() {
 
   serialize(header, serialized_header);
 
+  printf("Serialized header: ");
   for (int i = 0; i < 80; i++) {
-    printf("%02X ", serialized_header[i]);
+    printf("%02X", serialized_header[i]);
   }
   printf("\n");
+
+  uint32_t message_blocks[2][16];
+  pad(serialized_header, message_blocks);
+
+  uint32_t intermediate_hash[8];
+  sha256_hash(message_blocks, intermediate_hash);
+
+  printf("Intermediate hash: ");
+  for (int i = 0; i < 8; i++) {
+    printf("%02X", intermediate_hash[i]);
+  }
+  printf("\n");
+
 
 //  screen /dev/ttyUSB0 9600
 /*  while(1) {
@@ -105,11 +120,11 @@ void serialize(BlockHeader header, uint8_t *serialized_header) {
 
   uint32_to_bytes(header.version, serialized_header, &iterator);
 
-  for (int8_t i = 0; i < 1; i++) {
+  for (int8_t i = 0; i < 32; i++) {
     serialized_header[iterator++] = header.prev_block[i];
   }
 
-  for (int8_t i = 0; i < 1; i++) {
+  for (int8_t i = 0; i < 32; i++) {
     serialized_header[iterator++] = header.merkle_root[i];
   }
 
@@ -120,26 +135,34 @@ void serialize(BlockHeader header, uint8_t *serialized_header) {
   uint32_to_bytes(header.nonce, serialized_header, &iterator);
 }
 
-uint32_t *pad(uint8_t *bytes, uint16_t length) {
-  uint8_t byte = (length+1) / 8 - 1;
-  uint8_t extra_bit_spot = (length+1) % 8;
-  bytes[byte] = bytes[byte] | (1 << extra_bit_spot);
-  for (int i = extra_bit_spot + 1; i < 8; i++) {
-    bytes[byte] = bytes[byte] | (0 << i);
-  }
-  for (int i = byte + 1; i < 60; i++) {
-    bytes[byte] = 0x00;
+void pad(uint8_t *serialized_header, uint32_t (*message_blocks)[16]) {
+  uint8_t padded[128];
+  memcpy(padded, serialized_header, sizeof(serialized_header));
+  uint8_t byte = sizeof(serialized_header) + 1;
+  padded[byte] = 0b10000000;
+  byte++;
+  for (byte; byte < 120; byte++) {
+    padded[byte] = 0x00;
   }
 
-  static uint32_t message_block[16];
+  uint32_t message_size_bits = sizeof(serialized_header) * 8; // 640
+  uint32_to_bytes(message_size_bits, padded, &byte);
+  for (byte; byte < 128; byte++) {
+    padded[byte] = 0x00;
+  }
+
   for (int i = 0; i < 16; i++) {
-    message_block[i] = ((uint32_t)bytes[i*4]) |
-      ((uint32_t)bytes[i*4 + 1] << 8) |
-      ((uint32_t)bytes[i*4 + 2] << 16) |
-      ((uint32_t)bytes[i*4 + 3] << 24);
+    message_blocks[0][i] = ((uint32_t)padded[i*4]) |
+      ((uint32_t)padded[i*4 + 1] << 8) |
+      ((uint32_t)padded[i*4 + 2] << 16) |
+      ((uint32_t)padded[i*4 + 3] << 24);
   }
-
-  return message_block;
+  for (int i = 0; i < 16; i++) {
+    message_blocks[1][i] = ((uint32_t)padded[i*4]) |
+      ((uint32_t)padded[i*4 + 1] << 8) |
+      ((uint32_t)padded[i*4 + 2] << 16) |
+      ((uint32_t)padded[i*4 + 3] << 24);
+  }
 }
 
 uint32_t rotr(uint32_t word, uint8_t n) {
@@ -203,9 +226,7 @@ uint32_t temporary2() {
           ) % 0xfffffff;
 }
 
-uint32_t *schedule(uint32_t *message_block) {
-  static uint32_t message_schedule[64];
-
+void schedule(uint32_t *message_block, uint32_t *message_schedule) {
   for (int i = 0; i < 16; i++) {
     message_schedule[i] = message_block[i];
   }
@@ -215,15 +236,12 @@ uint32_t *schedule(uint32_t *message_block) {
                             bitwise0(message_schedule[i-15]) + 
                             message_schedule[i-16] ) % 0xffffffff;
   }
-
-  return message_schedule;
 }
 
+void compression(uint32_t *message_schedule, uint32_t *initial_hash) {
+  uint32_t original_initial_hash[8];
+  memcpy(original_initial_hash, initial_hash, sizeof(original_initial_hash));
 
-
-void compression(uint32_t *message_schedule) {
-  uint32_t initial_hash[8];
-  memcpy(initial_hash, squares, sizeof(initial_hash));
   for (int i = 0; i < 64; i++) {
     uint32_t word = message_schedule[i];
     uint32_t constant = constants[i];
@@ -238,11 +256,17 @@ void compression(uint32_t *message_schedule) {
   }
 
   for (int i = 0; i < 8; i++) {
-    initial_hash[i] = (squares[i] + initial_hash[i]) % 0xffffffff;
+    initial_hash[i] = (original_initial_hash[i] + initial_hash[i]) % 0xffffffff;
   }
 }
 
-void sha256_hash(uint32_t *message_blocks) {
+void sha256_hash(uint32_t (*message_blocks)[16], uint32_t *initial_hash) {
+  memcpy(initial_hash, squares, sizeof(initial_hash));
+  for (int i = 0; i < sizeof(message_blocks) / sizeof(message_blocks[0]); i++) {
+    uint32_t message_schedule[64];
+    schedule(message_blocks[i], message_schedule);
+    compression(message_schedule, initial_hash);
+  }
 }
 
 /*
