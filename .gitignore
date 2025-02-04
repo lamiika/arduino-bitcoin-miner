@@ -1,4 +1,5 @@
 *.bin
 *.hex
 *.o
+*.exe
 miner
